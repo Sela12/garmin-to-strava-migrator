@@ -4,7 +4,7 @@ __pycache__/
 
 # Logs and Tokens
 *.log
-strava_tokens.json
+.strava_tokens.json
 
 # Environment
 .env
