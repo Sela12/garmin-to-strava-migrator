@@ -341,3 +341,5 @@ class AsyncStravaUploader:
             asyncio.run(self.run_async(max_concurrent=max_concurrent))
         except KeyboardInterrupt:
             print("\nUpload cancelled by user.")
+            # Print summary even when interrupted
+            self._print_summary()
