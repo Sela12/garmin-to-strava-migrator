@@ -126,8 +126,13 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[st
     junk_dir.mkdir(parents=True, exist_ok=True)
 
     fits_to_process: List[Path] = sorted(fit_folder.glob("*.fit")) + sorted(fit_folder.glob("*.FIT"))
+    # Only include files in the main directory (not in subdirs)
+    fits_to_process = [f for f in fits_to_process if f.exists() and f.parent == fit_folder]
+
+    logger.info(f"Pre-sweep starting: {len(fits_to_process)} files to inspect")
 
     if not fits_to_process:
+        logger.info("No FIT files found to inspect")
         return {"inspected": 0, "moved": 0, "errors": 0}
 
     inspected = 0
@@ -152,17 +157,20 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[st
                     try:
                         fit_path.replace(dest)
                         moved += 1
+                        logger.info(f"Moved to _junk: {fit_path.name} (type: {reason})")
                     except FileNotFoundError:
                         # File disappeared; skip silently
-                        pass
+                        logger.debug(f"File disappeared during move: {fit_path.name}")
                     except Exception as e:
-                        logger.debug(f"Could not move {fit_path.name} to _junk: {e}")
+                        logger.warning(f"Could not move {fit_path.name} to _junk: {e}")
                         errors += 1
                 elif action == 'error':
                     # Could not parse file; leave it for upload (safer)
-                    logger.debug(f"Could not inspect {fit_path.name}: {reason}")
+                    logger.warning(f"Could not inspect {fit_path.name}: {reason}")
                     errors += 1
-                # else: 'keep' - do nothing, file stays in main folder
+                elif action == 'keep':
+                    # Valid activity file
+                    logger.debug(f"Keeping activity: {fit_path.name} (type: {reason})")
 
             except Exception as e:
                 logger.debug(f"Error processing {fit_path.name}: {e}")
@@ -170,5 +178,6 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[st
 
             pbar.update(1)
 
+    logger.info(f"Pre-sweep complete: inspected={inspected}, moved_to_junk={moved}, errors={errors}")
     return {"inspected": inspected, "moved": moved, "errors": errors}
 

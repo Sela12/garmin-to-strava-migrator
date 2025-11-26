@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 import aiohttp
 from tqdm.asyncio import tqdm
@@ -69,6 +69,7 @@ class AsyncStravaUploader:
 
         if activity_id:
             self.upload_stats["success"] += 1
+            logger.info(f"✓ Upload successful: {fit_path.name} → activity_id={activity_id}, upload_id={upload_id}")
             try:
                 self.processed.append({"file": str(fit_path), "status": "created", "upload_id": upload_id, "activity_id": activity_id})
             except Exception:
@@ -77,10 +78,12 @@ class AsyncStravaUploader:
             try:
                 if fit_path.exists():
                     fit_path.unlink()
-            except Exception:
-                pass
+                    logger.debug(f"Deleted uploaded file: {fit_path.name}")
+            except Exception as e:
+                logger.debug(f"Could not delete {fit_path.name}: {e}")
         elif "duplicate" in str(status).lower():
             self.upload_stats["duplicate"] += 1
+            logger.info(f"⊗ Duplicate detected: {fit_path.name} (upload_id={upload_id})")
             try:
                 self.processed.append({"file": str(fit_path), "status": "duplicate", "upload_id": upload_id, "activity_id": activity_id})
             except Exception:
@@ -89,12 +92,12 @@ class AsyncStravaUploader:
             try:
                 if fit_path.exists():
                     fit_path.unlink()
-            except Exception:
-                pass
+                    logger.debug(f"Deleted duplicate file: {fit_path.name}")
+            except Exception as e:
+                logger.debug(f"Could not delete duplicate {fit_path.name}: {e}")
         else:
-            # Only log unusual statuses
-            if status and "still being processed" not in status and "error processing" not in status.lower():
-                logger.debug(f"Upload status for {fit_path.name}: {status}")
+            # Log all failure statuses to file
+            logger.warning(f"✗ Upload failed: {fit_path.name} | Status: {status} | upload_id={upload_id}")
             self.upload_stats["failed"] += 1
             try:
                 self.processed.append({"file": str(fit_path), "status": "failed", "upload_id": upload_id, "activity_id": activity_id, "reason": status})
@@ -124,8 +127,10 @@ class AsyncStravaUploader:
                 logger.warning("Poller not available for upload_id %s", body.get("id"))
         elif status_code == 409:  # Duplicate
             self.upload_stats["duplicate"] += 1
+            logger.info(f"⊗ Duplicate at upload: {fit_path.name}")
             if fit_path.exists():
                 fit_path.unlink()
+                logger.debug(f"Deleted duplicate: {fit_path.name}")
         elif status_code == 429:  # Rate limited
             # When rate limited, prefer to use Retry-After header if provided
             ra = headers.get("Retry-After") or headers.get("retry-after")
@@ -137,7 +142,7 @@ class AsyncStravaUploader:
                     ra_val = None
             if self._pbar:
                 self._pbar.set_description("Rate limited. Re-queueing...")
-            logger.warning("Upload returned 429 for %s. Retry-After=%s", fit_path.name, ra)
+            logger.warning(f"⚠ Rate limit 429 for {fit_path.name} | Retry-After: {ra_val or 'not specified'}")
             await self.limiter.force_backoff(ra_val)
             return True  # Retry
         else:
@@ -161,10 +166,13 @@ class AsyncStravaUploader:
             token = self.auth.ensure_token()
             headers = {"Authorization": f"Bearer {token}"}
             
+            logger.info(f"→ Uploading: {fit_path.name}")
+            
             # Read file content into memory and close the handle immediately
             try:
                 with fit_path.open("rb") as f:
                     fit_content = f.read()
+                logger.debug(f"Read {len(fit_content)} bytes from {fit_path.name}")
             except FileNotFoundError:
                 logger.warning(f"File disappeared before upload: {fit_path.name}")
                 if self._pbar:
@@ -175,7 +183,11 @@ class AsyncStravaUploader:
             data.add_field("data_type", "fit")
             data.add_field("file", fit_content, filename=fit_path.name, content_type="application/octet-stream")
 
-            resp = await session.post(self.UPLOAD_URL, headers=headers, data=data)
+            # Add 60-second timeout to prevent stuck uploads
+            timeout = aiohttp.ClientTimeout(total=60)
+            resp = await session.post(self.UPLOAD_URL, headers=headers, data=data, timeout=timeout)
+            
+            logger.info(f"← Response for {fit_path.name}: HTTP {resp.status}")
             
             # Parse response and convert to normalized dict for handler
             resp_dict = {
@@ -184,25 +196,35 @@ class AsyncStravaUploader:
                 "body": await resp.json() if resp.status == 201 else {},
             }
             
+            if resp.status == 201 and resp_dict["body"]:
+                logger.debug(f"Upload response body for {fit_path.name}: {resp_dict['body']}")
+            
             # Update rate limits from response headers
             self.limiter.update_limits(dict(resp.headers))
             
             retry_needed = await self._handle_upload_response(resp_dict, fit_path)
             if retry_needed:
                 self.upload_stats["retries"] += 1
+                logger.info(f"↻ Re-queuing {fit_path.name} for retry (rate limited)")
                 await queue.put(fit_path)  # Re-add to the queue for retry
             else:
                 if self._pbar:
                     self._pbar.update(1)
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.debug(f"Upload of {fit_path.name} failed: {e}")
+        except asyncio.TimeoutError:
+            logger.error(f"✗ Upload timeout (60s) for {fit_path.name}")
+            self.upload_stats["failed"] += 1
+            await self._move_to_failed(fit_path)
+            if self._pbar:
+                self._pbar.update(1)
+        except aiohttp.ClientError as e:
+            logger.error(f"✗ Network error uploading {fit_path.name}: {e}")
             self.upload_stats["failed"] += 1
             await self._move_to_failed(fit_path)
             if self._pbar:
                 self._pbar.update(1)
         except Exception as e:
-            logger.debug(f"Error while uploading {fit_path.name}: {e}")
+            logger.error(f"✗ Unexpected error uploading {fit_path.name}: {e}")
             self.upload_stats["failed"] += 1
             await self._move_to_failed(fit_path)
             if self._pbar:
@@ -227,15 +249,22 @@ class AsyncStravaUploader:
     async def run_async(self, max_concurrent: int = 5):
         """Runs the async uploader with a queue and worker pattern."""
         folder = self.config.fit_folder
-        fits_to_upload: List[Path] = sorted(list(folder.glob("*.fit")) + list(folder.glob("*.FIT")))
+        
+        # Get all FIT files, filtering out special directories
+        all_fits = sorted(list(folder.glob("*.fit")) + list(folder.glob("*.FIT")))
+        fits_to_upload = [f for f in all_fits if f.exists() and f.parent == folder]
+        
+        # Double-check: exclude files in _junk, _failed, _processing subdirs
         fits_to_upload = [f for f in fits_to_upload if f.parent.name not in ("_junk", "_failed", "_processing")]
 
         if not fits_to_upload:
             print("No new FIT files to upload.")
+            logger.info("No FIT files found in main directory")
             return
 
         self.upload_stats["total"] = len(fits_to_upload)
         print(f"Found {len(fits_to_upload)} FIT files to upload.")
+        logger.info(f"Starting upload session: {len(fits_to_upload)} files queued")
 
         queue: asyncio.Queue[Path] = asyncio.Queue()
         for fit in fits_to_upload:
