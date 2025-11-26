@@ -1,8 +1,10 @@
 from pathlib import Path
 from fitparse import FitFile, FitParseError
-import sys
+from dotenv import load_dotenv
+from os import getenv
 
-FIT_FOLDER = Path(r"C:\Users\סלע נץ\Documents\garmin")
+load_dotenv(encoding='utf-8')
+FIT_FOLDER = Path(getenv('FIT_FOLDER') or Path.cwd())
 JUNK = FIT_FOLDER / "_junk"
 FAILED = FIT_FOLDER / "_failed"
 

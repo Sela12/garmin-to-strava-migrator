@@ -1,8 +1,11 @@
 from pathlib import Path
 from fitparse import FitFile
 from typing import Any
+from dotenv import load_dotenv
+from os import getenv
 
-FIT_FOLDER = Path(r"C:\Users\סלע נץ\Documents\garmin")
+load_dotenv(encoding='utf-8')
+FIT_FOLDER = Path(getenv('FIT_FOLDER') or Path.cwd())
 
 counts = {}
 missing = 0

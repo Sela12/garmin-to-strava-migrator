@@ -1,9 +1,12 @@
 from pathlib import Path
 from fitparse import FitFile, FitParseError
 from typing import Any
+from dotenv import load_dotenv
+from os import getenv
 import datetime
 
-FIT_FOLDER = Path(r"C:\Users\סלע נץ\Documents\garmin")
+load_dotenv(encoding='utf-8')
+FIT_FOLDER = Path(getenv('FIT_FOLDER') or Path.cwd())
 JUNK = FIT_FOLDER / "_junk"
 
 if not JUNK.exists():

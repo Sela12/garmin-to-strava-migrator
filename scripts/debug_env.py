@@ -1,17 +1,20 @@
 from pathlib import Path
-from dotenv import dotenv_values
-import os
+from dotenv import dotenv_values, load_dotenv
 
-os.chdir(r'c:\Users\סלע נץ\Documents\strava')
-env_path = Path.cwd() / '.env'
+# Determine repository root relative to this script and locate .env there
+repo_root = Path(__file__).resolve().parent.parent
+env_path = repo_root / '.env'
 print(f'Loading from: {env_path}')
 print(f'Exists: {env_path.exists()}')
 if env_path.exists():
-    print(f'Contents of .env:')
+    print('Contents of .env:')
     try:
         print(env_path.read_text(encoding='utf-8'))
     except Exception as e:
         print(f'Error reading: {e}')
+
+# Also load into environment for other scripts
+load_dotenv(dotenv_path=env_path, encoding='utf-8')
 
 values = dotenv_values(env_path)
 print('Loaded values from dotenv_values():')
