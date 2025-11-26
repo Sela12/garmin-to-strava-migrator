@@ -1,97 +1,92 @@
-import time
-import time
+import asyncio
 import logging
-from typing import Callable
-
-import requests
+import time
+from collections import deque
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-
-def request_with_retries(fn: Callable[..., requests.Response], max_retries: int = 4, backoff_factor: float = 1.0) -> Callable[..., requests.Response]:
-    """Return a wrapper that calls `fn` and retries on transient errors.
-
-    The wrapped function should have the same signature as `requests.request`/session.request
-    and return a `requests.Response`.
+class AsyncRateLimiter:
+    """
+    An asyncio-compatible rate limiter that adjusts to Strava's API limits.
+    It uses a token bucket-like approach and adjusts based on API header feedback.
     """
 
-    def wrapper(*args, **kwargs) -> requests.Response:
-        attempt = 0
-        while True:
-            try:
-                resp = fn(*args, **kwargs)
-            except requests.RequestException as e:
-                attempt += 1
-                if attempt > max_retries:
-                    logger.exception("Request failed after %s attempts", attempt)
-                    raise
-                sleep_for = backoff_factor * (2 ** (attempt - 1))
-                logger.warning("Request exception: %s. Retrying in %ss (attempt %s)", e, sleep_for, attempt)
-                time.sleep(sleep_for)
-                continue
-
-            # On HTTP errors, optionally respect Retry-After for 429
-            if resp.status_code == 429:
-                attempt += 1
-                if attempt > max_retries:
-                    resp.raise_for_status()
-                retry_after = resp.headers.get("Retry-After")
-                sleep_for = float(retry_after) if retry_after and retry_after.isdigit() else backoff_factor * (2 ** (attempt - 1))
-                logger.warning("Rate limited (429). Sleeping %s seconds before retry (attempt %s)", sleep_for, attempt)
-                time.sleep(sleep_for)
-                continue
-
-            if 500 <= resp.status_code < 600:
-                attempt += 1
-                if attempt > max_retries:
-                    resp.raise_for_status()
-                sleep_for = backoff_factor * (2 ** (attempt - 1))
-                logger.warning("Server error %s. Retrying in %s seconds (attempt %s)", resp.status_code, sleep_for, attempt)
-                time.sleep(sleep_for)
-                continue
-
-            return resp
-
-    return wrapper
-
-
-class RateLimiter:
-    """Simple per-window and daily counters to avoid hitting Strava limits.
-
-    The numbers should be tuned to your app's quota and traffic pattern.
-    """
-
-    def __init__(self, daily_limit: int = 10000, window_limit: int = 100):
-        self.daily_limit = daily_limit
-        self.window_limit = window_limit
-        # Strava's short window is 15 min; add tiny buffer
-        self.window_size = 15 * 60 + 5
+    def __init__(self, initial_daily_limit: int = 1000, initial_window_limit: int = 100):
+        self.daily_limit = initial_daily_limit
+        self.window_limit = initial_window_limit
+        self.window_size = 15 * 60  # 15 minutes in seconds
 
         self.daily_count = 0
-        self.window_count = 0
-        self.window_start = time.time()
+        self.daily_start_time = time.time()
 
-    def wait_if_needed(self) -> None:
-        if self.daily_count >= self.daily_limit:
-            logger.warning("Daily limit (%s) reached. Pausing for 24 hours.", self.daily_limit)
-            time.sleep(24 * 3600)
-            self.daily_count = 0
+        self.window_requests = deque()
+        self._lock = asyncio.Lock()
 
-        if self.window_count >= self.window_limit:
-            elapsed = time.time() - self.window_start
-            if elapsed < self.window_size:
-                sleep_time = self.window_size - elapsed
-                logger.warning("Rate window full. Cooling down for %.1fs...", sleep_time)
-                time.sleep(sleep_time)
-            self.window_count = 0
-            self.window_start = time.time()
+    def _prune_window(self):
+        """Remove requests from the window that are older than the window size."""
+        now = time.time()
+        while self.window_requests and self.window_requests[0] < now - self.window_size:
+            self.window_requests.popleft()
 
-    def record_request(self) -> None:
-        self.daily_count += 1
-        self.window_count += 1
+    async def acquire(self):
+        """Acquire a permit to make a request, waiting if necessary."""
+        async with self._lock:
+            now = time.time()
 
-    def force_backoff(self) -> None:
-        logger.warning("Received 429 Rate Limit. Forcing %s second sleep.", self.window_size)
-        time.sleep(self.window_size)
-        self.window_count = 0
-        self.window_start = time.time()
+            # Reset daily count if a day has passed
+            if now - self.daily_start_time > 24 * 3600:
+                self.daily_count = 0
+                self.daily_start_time = now
+
+            if self.daily_count >= self.daily_limit:
+                logger.warning("Daily limit of %d reached. Sleeping for 24 hours.", self.daily_limit)
+                await asyncio.sleep(24 * 3600)
+                self.daily_count = 0
+                self.daily_start_time = time.time()
+
+            self._prune_window()
+
+            if len(self.window_requests) >= self.window_limit:
+                wait_time = self.window_requests[0] + self.window_size - now
+                if wait_time > 0:
+                    logger.warning("Short-term rate limit reached. Sleeping for %.1f seconds.", wait_time)
+                    await asyncio.sleep(wait_time)
+                
+                # Prune again after waiting
+                self._prune_window()
+            
+            self.window_requests.append(time.time())
+            self.daily_count += 1
+
+    def update_limits(self, headers: Optional[dict]):
+        """Update rate limits based on Strava API response headers."""
+        if not headers:
+            return
+
+        try:
+            short_term_usage, short_term_limit = map(int, headers.get("X-RateLimit-Usage", "0,0").split(','))
+            long_term_usage, long_term_limit = map(int, headers.get("X-RateLimit-Limit", "0,0").split(','))
+
+            self.window_limit = short_term_limit
+            self.daily_limit = long_term_limit
+
+            # Adjust current counts based on headers
+            now = time.time()
+            self._prune_window()
+            
+            # Update window count to match the server's view
+            while len(self.window_requests) < short_term_usage:
+                self.window_requests.append(now)
+
+            self.daily_count = long_term_usage
+
+        except (ValueError, IndexError):
+            logger.warning("Could not parse Strava rate limit headers.")
+
+    async def force_backoff(self):
+        """Force a backoff when a 429 is received without a Retry-After header."""
+        wait_time = self.window_size / self.window_limit if self.window_limit > 0 else 5
+        logger.warning("Forced backoff due to 429. Sleeping for %.1f seconds.", wait_time)
+        await asyncio.sleep(wait_time)
+

@@ -17,7 +17,7 @@ CLIENT_SECRET = getenv('CLIENT_SECRET')
 AUTH_CODE = getenv('AUTH_CODE')
 FIT_FOLDER = getenv('FIT_FOLDER')
 
-def setup_logging() -> None:
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -26,9 +26,7 @@ def setup_logging() -> None:
             logging.StreamHandler(sys.stdout)
         ]
     )
-
-def main() -> None:
-    setup_logging()
+    
     # Validate configuration
     if not CLIENT_ID or not CLIENT_SECRET or not AUTH_CODE:
         logging.critical("Missing Strava credentials. Please set CLIENT_ID, CLIENT_SECRET and AUTH_CODE in your environment or .env file.")
@@ -51,8 +49,13 @@ def main() -> None:
         return
 
     try:
-        moved, inspected = pre_sweep_move_junk(config.fit_folder)
-        logging.info(f"Pre-sweep moved {moved} non-activity files out of {inspected} inspected")
+        pre_sweep_summary = pre_sweep_move_junk(config.fit_folder)
+        print("\n--- Pre-sweep Report ---")
+        print(f"  Inspected: {pre_sweep_summary['inspected']}")
+        print(f"  Moved to _junk: {pre_sweep_summary['moved']}")
+        if pre_sweep_summary['errors'] > 0:
+            print(f"  Errors: {pre_sweep_summary['errors']}")
+        print("------------------------\n")
     except Exception:
         logging.exception("Pre-sweep failed; continuing to upload existing files")
 

@@ -15,11 +15,12 @@ This module depends on the ``fitparse`` package.
 """
 from pathlib import Path
 import logging
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Any
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from fitparse import FitFile, FitParseError
+from tqdm import tqdm
 
 
 logger = logging.getLogger(__name__)
@@ -52,9 +53,6 @@ def _inspect_fit(path_str: str) -> Tuple[str, str, str]:
             return path_str, "keep", "no_file_id"
 
         file_id = file_id_msgs[0]
-        # `file_id` can be a fitparse Message or a dict-like object depending
-        # on how fitparse yields messages in different versions/environments.
-        # Guard access so static type checkers (Pylance) won't complain.
         try:
             if hasattr(file_id, "get_value"):
                 ftype = getattr(file_id, "get_value")("type")
@@ -70,12 +68,10 @@ def _inspect_fit(path_str: str) -> Tuple[str, str, str]:
 
         ftype_str = str(ftype).lower()
         if "activity" in ftype_str:
-            # Additional heuristic: check session.sport and distance fields
             try:
                 sessions = list(fit.get_messages("session"))
                 if sessions:
                     session = sessions[0]
-                    # Extract sport field
                     sport = None
                     distance = None
                     try:
@@ -90,7 +86,6 @@ def _inspect_fit(path_str: str) -> Tuple[str, str, str]:
 
                     sport_str = str(sport).lower() if sport else ""
                     
-                    # Reject training/synthetic activities without distance data
                     if sport_str == "training" or (distance is None and "training" in sport_str):
                         return path_str, "move", f"training_activity:{sport_str}"
             except Exception:
@@ -106,7 +101,7 @@ def _inspect_fit(path_str: str) -> Tuple[str, str, str]:
         return path_str, "error", str(e)
 
 
-def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Tuple[int, int]:
+def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[str, Any]:
     """Scan ``fit_folder`` and move non-activity files to a ``_junk`` subfolder.
 
     This function parallelizes the FIT inspection using a :class:`ProcessPoolExecutor`.
@@ -121,101 +116,57 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Tuple[i
 
     Returns
     -------
-    Tuple[int, int]
-        ``(moved_count, inspected_count)``
+    Dict[str, Any]
+        A summary of the operation.
     """
     fit_folder = Path(fit_folder)
     if not fit_folder.exists():
         logger.critical("FIT folder does not exist: %s", fit_folder)
-        return 0, 0
+        return {"inspected": 0, "moved": 0, "errors": 0}
 
     junk_dir = fit_folder / "_junk"
     junk_dir.mkdir(parents=True, exist_ok=True)
 
-    processing_dir = fit_folder / "_processing"
-    processing_dir.mkdir(parents=True, exist_ok=True)
+    fits_to_process: List[Path] = sorted(fit_folder.glob("*.fit")) + sorted(fit_folder.glob("*.FIT"))
+    fits_to_process = [f for f in fits_to_process if f.parent.name not in ("_junk", "_failed")]
 
-    fits: List[Path] = sorted(fit_folder.glob("*.fit")) + sorted(fit_folder.glob("*.FIT"))
-    # Filter out files already in special folders
-    fits = [f for f in fits if f.parent.name not in ("_junk", "_failed", "_processing")]
+
+    if not fits_to_process:
+        return {"inspected": 0, "moved": 0, "errors": 0}
+
+    workers = workers or min(32, (os.cpu_count() or 1))
 
     inspected = 0
     moved = 0
-
-    if not fits:
-        logger.info("No FIT files found in %s", fit_folder)
-        return moved, inspected
-
-    workers = workers or min(32, (os.cpu_count() or 1))
-    logger.info("Pre-sweep starting: inspecting %s files with %s workers", len(fits), workers)
-
-    # To avoid races where files may be moved/processed concurrently we first
-    # atomically move each candidate into a dedicated `_processing` folder and
-    # then submit the moved path to worker processes. Parent process then moves
-    # the file to the final destination based on inspection result. Using
-    # Path.replace/os.replace ensures moves are atomic on the same filesystem.
-    moved_into_processing: List[Path] = []
-    for f in fits:
-        src = f
-        dst = processing_dir / f.name
-        try:
-            # Atomic move; if file was removed/moved by another process this will fail
-            src.replace(dst)
-            moved_into_processing.append(dst)
-        except FileNotFoundError:
-            logger.warning("File disappeared before processing (skipping): %s", src)
-        except Exception:
-            logger.exception("Failed to move %s into processing; skipping", src)
-
-    if not moved_into_processing:
-        logger.info("No files moved into processing; nothing to inspect")
-        return moved, inspected
-
-    # Submit inspect tasks for files under _processing
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_inspect_fit, str(f)): f for f in moved_into_processing}
+    errors = 0
+    
+    results = []
+    with ProcessPoolExecutor(max_workers=workers) as ex, tqdm(total=len(fits_to_process), desc="Inspecting FIT files") as pbar:
+        futures = {ex.submit(_inspect_fit, str(f)): f for f in fits_to_process}
 
         for fut in as_completed(futures):
-            proc_path = futures[fut]
             try:
-                path_str, action, reason = fut.result()
+                results.append(fut.result())
             except Exception as e:
+                proc_path = futures[fut]
                 logger.exception("Worker crashed inspecting %s: %s", proc_path, e)
-                # Attempt to move file back to original folder so it can be retried
-                try:
-                    dest_back = fit_folder / proc_path.name
-                    proc_path.replace(dest_back)
-                except Exception:
-                    logger.exception("Failed to move %s back after worker crash", proc_path)
-                continue
+                errors += 1
+            pbar.update(1)
 
-            inspected += 1
+    for path_str, action, reason in results:
+        inspected += 1
+        if action == 'move':
             try:
-                if action == 'move':
-                    try:
-                        dest = junk_dir / Path(path_str).name
-                        Path(path_str).replace(dest)
-                        moved += 1
-                        logger.info("Moved non-activity file %s -> %s (type=%s)", path_str, dest, reason)
-                    except Exception:
-                        logger.exception("Failed to move %s to _junk", path_str)
-                elif action == 'error':
-                    logger.warning("Error inspecting %s: %s; moving back to folder", path_str, reason)
-                    try:
-                        dest_back = fit_folder / Path(path_str).name
-                        Path(path_str).replace(dest_back)
-                    except Exception:
-                        logger.exception("Failed to move %s back after error", path_str)
-                else:
-                    # keep -> move back to original folder
-                    try:
-                        dest_back = fit_folder / Path(path_str).name
-                        Path(path_str).replace(dest_back)
-                        logger.debug("Keeping activity file %s (reason=%s)", path_str, reason)
-                    except Exception:
-                        logger.exception("Failed to move %s back to folder", path_str)
+                dest = junk_dir / Path(path_str).name
+                if Path(path_str).exists():
+                    Path(path_str).replace(dest)
+                    moved += 1
             except Exception:
-                logger.exception("Unexpected error handling inspected file %s", path_str)
+                logger.exception("Failed to move %s to _junk", path_str)
+                errors += 1
+        elif action == 'error':
+            errors += 1
+            logger.warning("Error inspecting %s: %s", path_str, reason)
 
-    logger.info("Pre-sweep complete: inspected=%s moved_to_junk=%s", inspected, moved)
-    return moved, inspected
+    return {"inspected": inspected, "moved": moved, "errors": errors}
+
