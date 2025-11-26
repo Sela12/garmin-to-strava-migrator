@@ -127,46 +127,92 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[st
     junk_dir = fit_folder / "_junk"
     junk_dir.mkdir(parents=True, exist_ok=True)
 
-    fits_to_process: List[Path] = sorted(fit_folder.glob("*.fit")) + sorted(fit_folder.glob("*.FIT"))
-    fits_to_process = [f for f in fits_to_process if f.parent.name not in ("_junk", "_failed")]
+    processing_dir = fit_folder / "_processing"
+    processing_dir.mkdir(exist_ok=True)
 
+    fits_to_process: List[Path] = sorted(fit_folder.glob("*.fit")) + sorted(fit_folder.glob("*.FIT"))
+    # Also include files that were moved to _processing in a previous run
+    fits_to_process += sorted(processing_dir.glob("*.fit")) + sorted(processing_dir.glob("*.FIT"))
 
     if not fits_to_process:
         return {"inspected": 0, "moved": 0, "errors": 0}
 
-    workers = workers or min(32, (os.cpu_count() or 1))
-
     inspected = 0
     moved = 0
     errors = 0
-    
-    results = []
-    with ProcessPoolExecutor(max_workers=workers) as ex, tqdm(total=len(fits_to_process), desc="Inspecting FIT files") as pbar:
-        futures = {ex.submit(_inspect_fit, str(f)): f for f in fits_to_process}
 
-        for fut in as_completed(futures):
+    with tqdm(total=len(fits_to_process), desc="Inspecting FIT files") as pbar:
+        for fit_path in fits_to_process:
+            if not fit_path.exists():
+                logger.warning(f"File disappeared before processing (skipping): {fit_path}")
+                pbar.update(1)
+                continue
+
+            # Move file to _processing to avoid clashes
+            processing_path = processing_dir / fit_path.name
             try:
-                results.append(fut.result())
-            except Exception as e:
-                proc_path = futures[fut]
-                logger.exception("Worker crashed inspecting %s: %s", proc_path, e)
+                fit_path.replace(processing_path)
+            except (FileNotFoundError, PermissionError) as e:
+                logger.error(f"Could not move {fit_path.name} to _processing folder, skipping: {e}")
                 errors += 1
+                pbar.update(1)
+                continue
+
+            try:
+                path_str, action, reason = _inspect_fit(str(processing_path))
+                inspected += 1
+
+                if action == 'move':
+                    dest = junk_dir / Path(path_str).name
+                    try:
+                        Path(path_str).replace(dest)
+                        moved += 1
+                    except FileNotFoundError:
+                        logger.error(f"File {Path(path_str).name} was moved or deleted during inspection.")
+                        errors += 1
+                    except Exception:
+                        logger.exception("Failed to move %s to _junk", path_str)
+                        errors += 1
+                elif action == 'error':
+                    errors += 1
+                    logger.warning("Error inspecting %s: %s", path_str, reason)
+                    # Move back to main folder if it's an error
+                    dest_back = fit_folder / Path(path_str).name
+                    try:
+                        Path(path_str).replace(dest_back)
+                    except Exception:
+                        logger.exception(f"Failed to move {Path(path_str).name} back after error")
+
+                else:  # Keep
+                    dest_back = fit_folder / Path(path_str).name
+                    try:
+                        Path(path_str).replace(dest_back)
+                    except Exception:
+                        logger.exception(f"Failed to move {Path(path_str).name} back to main folder")
+
+
+            except Exception as e:
+                logger.exception("A critical error occurred inspecting %s: %s", processing_path.name, e)
+                errors += 1
+                # Try to move it back to the main folder
+                dest_back = fit_folder / processing_path.name
+                try:
+                    if processing_path.exists():
+                        processing_path.replace(dest_back)
+                except Exception:
+                    logger.exception(f"Failed to move {processing_path.name} back to main folder after critical error")
+
             pbar.update(1)
 
-    for path_str, action, reason in results:
-        inspected += 1
-        if action == 'move':
-            try:
-                dest = junk_dir / Path(path_str).name
-                if Path(path_str).exists():
-                    Path(path_str).replace(dest)
-                    moved += 1
-            except Exception:
-                logger.exception("Failed to move %s to _junk", path_str)
-                errors += 1
-        elif action == 'error':
-            errors += 1
-            logger.warning("Error inspecting %s: %s", path_str, reason)
+    # Cleanup: move any remaining files from _processing back to the main folder
+    for remaining_file in processing_dir.glob("*.fit"):
+        logger.warning(f"Moving orphaned file {remaining_file.name} back to main directory.")
+        dest_back = fit_folder / remaining_file.name
+        try:
+            remaining_file.replace(dest_back)
+        except Exception:
+            logger.exception(f"Failed to move orphaned file {remaining_file.name} back.")
+
 
     return {"inspected": inspected, "moved": moved, "errors": errors}
 
