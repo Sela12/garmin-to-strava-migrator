@@ -96,8 +96,8 @@ class AsyncStravaUploader:
             except Exception as e:
                 logger.debug(f"Could not delete duplicate {fit_path.name}: {e}")
         else:
-            # Log all failure statuses to file
-            logger.warning(f"✗ Upload failed: {fit_path.name} | Status: {status} | upload_id={upload_id}")
+            # Log all failure statuses to file only (not terminal)
+            logger.info(f"✗ Upload failed: {fit_path.name} | Status: {status} | upload_id={upload_id}")
             self.upload_stats["failed"] += 1
             try:
                 self.processed.append({"file": str(fit_path), "status": "failed", "upload_id": upload_id, "activity_id": activity_id, "reason": status})
@@ -124,7 +124,7 @@ class AsyncStravaUploader:
                 await self._poller.enqueue(upload_id, str(fit_path), _cb)
             else:
                 # Fallback: poller should always be available, but log if not
-                logger.warning("Poller not available for upload_id %s", body.get("id"))
+                logger.info("Poller not available for upload_id %s", body.get("id"))
         elif status_code == 409:  # Duplicate
             self.upload_stats["duplicate"] += 1
             logger.info(f"⊗ Duplicate at upload: {fit_path.name}")
@@ -142,7 +142,7 @@ class AsyncStravaUploader:
                     ra_val = None
             if self._pbar:
                 self._pbar.set_description("Rate limited. Re-queueing...")
-            logger.warning(f"⚠ Rate limit 429 for {fit_path.name} | Retry-After: {ra_val or 'not specified'}")
+            logger.info(f"⚠ Rate limit 429 for {fit_path.name} | Retry-After: {ra_val or 'not specified'}")
             await self.limiter.force_backoff(ra_val)
             return True  # Retry
         else:
@@ -156,7 +156,7 @@ class AsyncStravaUploader:
     ):
         """Uploads a single file and re-queues on rate limit."""
         if not fit_path.exists():
-            logger.warning(f"File disappeared before upload: {fit_path.name}")
+            logger.info(f"File disappeared before upload: {fit_path.name}")
             if self._pbar:
                 self._pbar.update(1)
             return
@@ -174,7 +174,7 @@ class AsyncStravaUploader:
                     fit_content = f.read()
                 logger.debug(f"Read {len(fit_content)} bytes from {fit_path.name}")
             except FileNotFoundError:
-                logger.warning(f"File disappeared before upload: {fit_path.name}")
+                logger.info(f"File disappeared before upload: {fit_path.name}")
                 if self._pbar:
                     self._pbar.update(1)
                 return
