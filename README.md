@@ -16,7 +16,7 @@ This script uploads `.fit` files from any source to your Strava account. It work
 
 1.  **Clone the repository:**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/Sela12/garmin-to-strava-migrator.git
     cd strava-fit-uploader
     ```
 
