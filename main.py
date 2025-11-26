@@ -17,7 +17,7 @@ CLIENT_SECRET = getenv('CLIENT_SECRET')
 AUTH_CODE = getenv('AUTH_CODE')
 FIT_FOLDER = getenv('FIT_FOLDER')
 
-def setup_logging():
+def setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -27,7 +27,7 @@ def setup_logging():
         ]
     )
 
-def main():
+def main() -> None:
     setup_logging()
     # Validate configuration
     if not CLIENT_ID or not CLIENT_SECRET or not AUTH_CODE:

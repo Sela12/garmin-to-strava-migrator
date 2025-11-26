@@ -3,7 +3,6 @@ import time
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -12,25 +11,39 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TokenInfo:
+    """Container for access/refresh token information."""
     access_token: str
-    refresh_token: Optional[str]
+    refresh_token: str | None
     expires_at: int
 
 
 class StravaAuth:
     """Handles exchanging the auth code and refreshing tokens.
 
-    Optionally persists tokens to `token_file` when provided to avoid
+    Optionally persists tokens to ``token_file`` when provided to avoid
     re-exchanging the auth code each run.
     """
     TOKEN_URL = "https://www.strava.com/oauth/token"
 
-    def __init__(self, client_id: str, client_secret: str, auth_code: str, token_file: Optional[Path] = None):
+    def __init__(self, client_id: str, client_secret: str, auth_code: str, token_file: Path | None = None) -> None:
+        """Initialize the auth helper.
+
+        Parameters
+        ----------
+        client_id: str
+            Strava client id.
+        client_secret: str
+            Strava client secret.
+        auth_code: str
+            One-time authorization code.
+        token_file: Path | None
+            Optional path to persist tokens.
+        """
         self.client_id = client_id
         self.client_secret = client_secret
         self.auth_code = auth_code
         self.token_file = token_file
-        self.token: Optional[TokenInfo] = None
+        self.token: TokenInfo | None = None
         if self.token_file:
             self._load_from_file()
 

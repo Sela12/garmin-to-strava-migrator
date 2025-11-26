@@ -2,7 +2,7 @@ import logging
 import time
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Callable
 
 import requests
 
@@ -16,23 +16,32 @@ logger = logging.getLogger(__name__)
 class StravaUploader:
 	"""Uploads FIT files from a folder to Strava using OAuth tokens.
 
-	Improvements:
-	- Handles HTTP 409 (duplicate) specially.
-	- Polls the upload status endpoint until Strava assigns an `activity_id` or returns an error.
-	- Moves corrupt/failed files to a `_failed` directory for inspection.
-	- Records successful ingestion only when Strava has created an activity.
+	The uploader handles common edge cases: duplicate uploads (409), polling
+	for final processing status, and moving permanently failed files to a
+	``_failed`` directory.
 	"""
 
 	UPLOAD_URL = "https://www.strava.com/api/v3/uploads"
 	UPLOAD_STATUS_URL = "https://www.strava.com/api/v3/uploads/{upload_id}"
 
-	def __init__(self, config: AppConfig, daily_limit: int = 2000, window_limit: int = 200):
+	def __init__(self, config: AppConfig, daily_limit: int = 2000, window_limit: int = 200) -> None:
+		"""Create a new uploader.
+
+		Parameters
+		----------
+		config: AppConfig
+			Application configuration containing credentials and paths.
+		daily_limit: int
+			Max uploads per day (approximate safety limit).
+		window_limit: int
+			Max uploads per short window (to avoid 429s).
+		"""
 		self.config = config
 		token_file = config.token_file or (Path.cwd() / ".strava_tokens.json")
 		self.auth = StravaAuth(config.client_id, config.client_secret, config.auth_code, token_file=token_file)
 		self.session = requests.Session()
 		# wrap session.request with retry/backoff logic
-		self.request = request_with_retries(self.session.request)
+		self.request: Callable[..., requests.Response] = request_with_retries(self.session.request)
 		self.limiter = RateLimiter(daily_limit=daily_limit, window_limit=window_limit)
 
 	def _move_to_failed(self, fit_path: Path) -> None:
@@ -93,7 +102,7 @@ class StravaUploader:
 		logger.warning("Upload %s polling timed out after %s seconds", upload_id, max_wait)
 		return {"id": upload_id, "status": "timed_out", "activity_id": None}
 
-	def _upload_single(self, fit_path: Path) -> Optional[dict]:
+	def _upload_single(self, fit_path: Path) -> dict | None:
 		token = self.auth.ensure_token()
 		headers = {"Authorization": f"Bearer {token}"}
 		data = {"data_type": "fit"}
@@ -146,7 +155,7 @@ class StravaUploader:
 			logger.exception("Failed to upload %s: %s", fit_path, e)
 			return None
 
-	def run(self):
+	def run(self) -> None:
 		folder = Path(self.config.fit_folder)
 		if not folder.exists():
 			logger.critical("FIT folder does not exist: %s", folder)

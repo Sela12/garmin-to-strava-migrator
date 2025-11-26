@@ -1,67 +1,103 @@
 """Pre-sweep cleaner for FIT files.
 
-Inspects each .fit file's `file_id` message and moves non-activity files
-to a `_junk` folder to save API bandwidth.
+This module provides a small pre-scan that inspects each FIT file's
+``file_id`` message and moves files that are not activities into a
+``_junk`` subfolder. The goal is to avoid uploading device logs,
+monitoring files and other non-activity FITs to Strava and wasting
+API quota.
 
 Heuristics:
-- If `file_id.type` exists and its string contains "activity" -> keep
-- If `file_id.type` exists and does NOT contain "activity" -> move to `_junk`
-- If parsing fails or `file_id` not found -> keep file (safer)
+- If ``file_id.type`` exists and its string contains "activity" -> keep
+- If ``file_id.type`` exists and does NOT contain "activity" -> move to ``_junk``
+- If parsing fails or ``file_id`` not found -> keep file (safer)
 
-This requires `fitparse` package.
+This module depends on the ``fitparse`` package.
 """
 from pathlib import Path
 import logging
 import shutil
-from typing import Tuple, List
+from typing import Tuple, List, Any
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from fitparse import FitFile, FitParseError
 
+
 logger = logging.getLogger(__name__)
 
 
 def _inspect_fit(path_str: str) -> Tuple[str, str, str]:
-    """Worker function run in a separate process.
+    """Inspect a single FIT file to determine whether it should be moved.
 
-    Returns (path_str, action, reason) where action is one of:
-    - 'move' (non-activity)
-    - 'keep' (activity or unreadable)
-    - 'error' (parse error)
-    reason is the file type or error message.
+    This function is safe to run in a separate process (it takes a string
+    path and returns a small tuple). The return value is a 3-tuple:
+
+    - ``path_str``: the original path string passed in
+    - ``action``: one of ``'move'``, ``'keep'`` or ``'error'``
+    - ``reason``: a short string describing the file type or the parsing error
+
+    Parameters
+    ----------
+    path_str: str
+        Filesystem path to the .fit file examined.
+
+    Returns
+    -------
+    Tuple[str, str, str]
+        See description above.
     """
     try:
         fit = FitFile(path_str)
-        file_id_msgs = list(fit.get_messages('file_id'))
+        file_id_msgs = list(fit.get_messages("file_id"))
         if not file_id_msgs:
-            return path_str, 'keep', 'no_file_id'
+            return path_str, "keep", "no_file_id"
 
         file_id = file_id_msgs[0]
+        # `file_id` can be a fitparse Message or a dict-like object depending
+        # on how fitparse yields messages in different versions/environments.
+        # Guard access so static type checkers (Pylance) won't complain.
         try:
-            ftype = file_id.get_value('type')
+            if hasattr(file_id, "get_value"):
+                ftype = getattr(file_id, "get_value")("type")  # type: Any
+            elif isinstance(file_id, dict):
+                ftype = file_id.get("type")  # type: Any
+            else:
+                ftype = None
         except Exception:
             ftype = None
 
         if ftype is None:
-            return path_str, 'keep', 'no_type'
+            return path_str, "keep", "no_type"
 
         ftype_str = str(ftype).lower()
-        if 'activity' in ftype_str:
-            return path_str, 'keep', ftype_str
+        if "activity" in ftype_str:
+            return path_str, "keep", ftype_str
         else:
-            return path_str, 'move', ftype_str
+            return path_str, "move", ftype_str
 
     except FitParseError as e:
-        return path_str, 'error', f'fitparse:{e}'
+        return path_str, "error", f"fitparse:{e}"
     except Exception as e:
-        return path_str, 'error', str(e)
+        return path_str, "error", str(e)
 
 
 def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Tuple[int, int]:
-    """Scan `fit_folder` and move non-activity files to a `_junk` subfolder using multiprocessing.
+    """Scan ``fit_folder`` and move non-activity files to a ``_junk`` subfolder.
 
-    Returns (moved_count, inspected_count).
+    This function parallelizes the FIT inspection using a :class:`ProcessPoolExecutor`.
+
+    Parameters
+    ----------
+    fit_folder: Path
+        Path to the folder containing .fit files to inspect.
+    workers: Optional[int]
+        Number of worker processes to spawn. If ``None`` the function will
+        pick a sensible default based on CPU count.
+
+    Returns
+    -------
+    Tuple[int, int]
+        ``(moved_count, inspected_count)``
     """
     fit_folder = Path(fit_folder)
     if not fit_folder.exists():
