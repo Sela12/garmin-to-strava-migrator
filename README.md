@@ -29,45 +29,58 @@ This script uploads `.fit` files from any source to your Strava account. It work
     -   Go to [https://www.strava.com/settings/api](https://www.strava.com/settings/api) and create a new application.
     -   You'll get a **Client ID** and a **Client Secret**.
 
-4.  **Authorize the application:**
+4.  **Create your `.env` file:**
+    
+    Create a `.env` file in the project root with your Strava API credentials:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit the `.env` file and add your Client ID and Secret (leave AUTH_CODE empty for now):
+    ```
+    CLIENT_ID=your_client_id
+    CLIENT_SECRET=your_client_secret
+    AUTH_CODE=
+    FIT_FOLDER=/path/to/your/fit/files
+    MAX_CONCURRENT=5
+    ```
+    - `MAX_CONCURRENT` controls how many files upload simultaneously (default: 5)
 
-    The easiest way to get your authorization code is to use the included `oauth_catcher.py` script:
+5.  **Authorize the application:**
+
+    **Option A: Automated OAuth (Recommended)**
+
+    Use the included `oauth_catcher.py` script to automatically handle authorization:
 
     ```bash
     python archived_scripts/oauth_catcher.py
     ```
 
     This script will:
-    - Open your browser to Strava's authorization page
-    - Receive the authorization code when you approve the application
-    - Exchange the code for an access token
-    - Automatically save both the code and token to your `.env` and `.strava_tokens.json` files
+    1. Read your `CLIENT_ID` and `CLIENT_SECRET` from the `.env` file
+    2. Start a local web server on `http://localhost:53682`
+    3. Open your browser to Strava's authorization page
+    4. Catch the authorization code when you approve the application
+    5. Exchange the code for access and refresh tokens
+    6. **Automatically update your `.env` file** with the `AUTH_CODE`
+    7. **Save tokens to `.strava_tokens.json`** for future use
 
-    **Manual Authorization (alternative):**
+    After running this once, the uploader will automatically refresh tokens as needed, so you won't need to re-authorize.
+
+    **Option B: Manual Authorization**
     
-    If you prefer to authorize manually:
-    -   Open the following URL in your browser, replacing `YOUR_CLIENT_ID` with your actual Client ID:
-        ```
-        https://www.strava.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=http://localhost:53682/callback&approval_prompt=auto&scope=activity:read,activity:write
-        ```
-    -   After authorizing, you'll be redirected to a URL like `http://localhost:53682/callback?code=YOUR_AUTH_CODE`.
-    -   Copy the `code` value from the URL. This is your **Authorization Code**.
-    -   Paste it into your `.env` file as shown in the next step.
+    If you prefer to authorize manually or the automated script doesn't work:
+    
+    1. Open the following URL in your browser, replacing `YOUR_CLIENT_ID` with your actual Client ID:
+       ```
+       https://www.strava.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=http://localhost:53682/callback&approval_prompt=auto&scope=activity:read,activity:write
+       ```
+    2. After authorizing, you'll be redirected to a URL like `http://localhost:53682/callback?code=YOUR_AUTH_CODE`
+    3. Copy the `code` value from the URL (this is your **Authorization Code**)
+    4. Manually paste it into your `.env` file as `AUTH_CODE=your_auth_code`
 
-5.  **Configure the environment:**
-    -   Create a `.env` file in the project root. You can copy `.env.example` to get started:
-        ```bash
-        cp .env.example .env
-        ```
-    -   Edit the `.env` file and fill in your details:
-        ```
-        CLIENT_ID=your_client_id
-        CLIENT_SECRET=your_client_secret
-        AUTH_CODE=your_auth_code
-        FIT_FOLDER=/path/to/your/fit/files
-        MAX_CONCURRENT=5
-        ```
-        - `MAX_CONCURRENT` controls how many files upload simultaneously (default: 5)
+    **Important:** The `.env` file contains sensitive credentials and is automatically excluded from git via `.gitignore`. Never commit this file to version control.
 
 6.  **Getting your FIT files**
 
