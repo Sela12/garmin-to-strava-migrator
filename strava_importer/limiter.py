@@ -45,7 +45,7 @@ class AsyncRateLimiter:
                     self.daily_start_time = now
 
                 if self.daily_count >= self.daily_limit:
-                    logger.warning("Daily limit of %d reached. Sleeping for 24 hours.", self.daily_limit)
+                    logger.info("Daily limit of %d reached. Sleeping for 24 hours.", self.daily_limit)
                     # Keep a cooperative short-sleep loop even for daily limit to allow cancellation
                     # Sleep in 60-second increments up to 24 hours
                     remaining = 24 * 3600
@@ -99,7 +99,7 @@ class AsyncRateLimiter:
             self.daily_count = long_term_usage
 
         except (ValueError, IndexError):
-            logger.warning("Could not parse Strava rate limit headers.")
+            logger.info("Could not parse Strava rate limit headers.")
 
     async def force_backoff(self, retry_after: Optional[float] = None):
         """Force a backoff when a 429 is received.
@@ -122,7 +122,7 @@ class AsyncRateLimiter:
         wait_time = min(max(wait_time, 1.0), 300.0)
         jitter = random.uniform(0, min(5.0, wait_time * 0.1))
         total = wait_time + jitter
-        logger.warning("Forced backoff due to 429. Sleeping for %.1f seconds (retry_after=%s).", total, retry_after)
+        logger.info("Forced backoff due to 429. Sleeping for %.1f seconds (retry_after=%s).", total, retry_after)
 
         remaining = total
         # Sleep in short increments so tasks can be cancelled cooperatively
@@ -130,4 +130,3 @@ class AsyncRateLimiter:
             to_sleep = min(5.0, remaining)
             await asyncio.sleep(to_sleep)
             remaining -= to_sleep
-
