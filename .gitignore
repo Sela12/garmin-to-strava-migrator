@@ -6,6 +6,11 @@ __pycache__/
 *.log
 .strava_tokens.json
 
+# Upload History
+upload_history.json
+after_action_report_*.json
+after_action_report_*.csv
+
 # Environment
 .env
 .venv/

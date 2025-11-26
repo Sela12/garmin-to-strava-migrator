@@ -1,6 +1,6 @@
-# Strava FIT File Uploader
+# FIT File to Strava Uploader
 
-This script uploads `.fit` files from a specified folder to your Strava account. It's designed to be robust, handling rate limits, duplicates, and other potential issues.
+This script uploads `.fit` files from any source to your Strava account. It works with FIT files from Garmin, Wahoo, Polar, Suunto, or any other device that exports FIT format. The uploader is designed to be robust, handling rate limits, duplicates, and other potential issues.
 
 ## Features
 
@@ -69,14 +69,46 @@ This script uploads `.fit` files from a specified folder to your Strava account.
         ```
         - `MAX_CONCURRENT` controls how many files upload simultaneously (default: 5)
 
-6.  **Getting your data from Garmin**
+6.  **Getting your FIT files**
+
+    The uploader works with FIT files from any source. Choose the option that matches your device:
+
+    **Option 1: From Any Device/Folder**
+    
+    Simply point `FIT_FOLDER` in your `.env` file to any folder containing `.fit` files. The uploader will process all FIT files it finds, regardless of the source device.
+
+    **Option 2: Export from Garmin Connect**
 
     1.  Go to [https://www.garmin.com/en-US/account/datamanagement/](https://www.garmin.com/en-US/account/datamanagement/).
     2.  Select "Export Your Data".
-    3.  Request an export of your data. This can take a while.
+    3.  Request an export of your data. This can take a while (often several hours).
     4.  Once your data is ready, you will receive an email with a download link.
     5.  Download and unzip the file. Inside, you will find a folder named `DI_CONNECT/DI-Connect-Fitness-Uploaded-Files`. This folder contains your `.fit` files.
     6.  Set the `FIT_FOLDER` in your `.env` file to the path of this folder.
+
+    **Option 3: Export from Wahoo ELEMNT**
+
+    1.  Connect your Wahoo device to your computer via USB.
+    2.  Navigate to the device storage and locate the `.fit` files (usually in a `workouts` or similar folder).
+    3.  Copy the FIT files to a local folder.
+    4.  Set the `FIT_FOLDER` in your `.env` file to the path of that folder.
+
+    **Option 4: Export from Polar Flow**
+
+    1.  Log in to [https://flow.polar.com](https://flow.polar.com).
+    2.  Go to your training diary and select the activities you want to export.
+    3.  Export each activity (Polar allows downloading as FIT or other formats).
+    4.  Collect all FIT files into a single folder.
+    5.  Set the `FIT_FOLDER` in your `.env` file to the path of that folder.
+
+    **Option 5: Export from Suunto**
+
+    1.  Log in to [https://www.suunto.com](https://www.suunto.com).
+    2.  Navigate to your training log and export activities (check if batch export is available).
+    3.  Download the FIT files to a local folder.
+    4.  Set the `FIT_FOLDER` in your `.env` file to the path of that folder.
+
+    **Note:** Some devices may require third-party tools or manual synchronization to extract FIT files. Check your device's documentation for specific export instructions.
 
 ## Usage
 
@@ -188,4 +220,4 @@ After processing, files are moved into one of four folders:
 
 **Token Persistence**: Tokens are refreshed automatically; once authorized, the script runs unattended. Tokens are persisted to `.strava_tokens.json` so re-running doesn't require re-authorization.
 
-**Pre-sweep Cleaning**: Garmin exports contain non-activity FIT files (device logs, firmware). The pre-sweep filters these out, saving API quota before attempting upload.
+**Pre-sweep Cleaning**: Device exports often contain non-activity FIT files (device logs, firmware updates, monitoring data). The pre-sweep filters these out, saving API quota before attempting upload.

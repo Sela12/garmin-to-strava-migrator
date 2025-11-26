@@ -297,7 +297,6 @@ class AsyncStravaUploader:
     def _print_summary(self):
         """Prints a summary of the upload session."""
         import json
-        import csv
         from datetime import datetime
 
         print("\n--- Upload Report ---")
@@ -309,29 +308,35 @@ class AsyncStravaUploader:
             print(f"  Files re-queued due to rate limits: {self.upload_stats['retries']}")
         print("---------------------\n")
 
-        # Write after-action report (JSON + CSV)
+        # Append to single after-action report JSON file
         try:
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-            json_file = f"after_action_report_{ts}.json"
-            csv_file = f"after_action_report_{ts}.csv"
-
+            json_file = "upload_history.json"
+            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            
+            # Create new report entry
+            report_entry = {
+                "timestamp": ts,
+                "summary": self.upload_stats,
+                "processed": self.processed
+            }
+            
+            # Load existing reports or create new list
+            try:
+                with open(json_file, "r", encoding="utf-8") as jf:
+                    history = json.load(jf)
+                    if not isinstance(history, list):
+                        history = []
+            except (FileNotFoundError, json.JSONDecodeError):
+                history = []
+            
+            # Append new report
+            history.append(report_entry)
+            
+            # Write back to file
             with open(json_file, "w", encoding="utf-8") as jf:
-                json.dump({"summary": self.upload_stats, "processed": self.processed}, jf, ensure_ascii=False, indent=2)
+                json.dump(history, jf, ensure_ascii=False, indent=2)
 
-            # CSV: file,status,upload_id,activity_id,reason
-            with open(csv_file, "w", encoding="utf-8", newline="") as cf:
-                writer = csv.writer(cf)
-                writer.writerow(["file", "status", "upload_id", "activity_id", "reason"])
-                for entry in self.processed:
-                    writer.writerow([
-                        entry.get("file"),
-                        entry.get("status"),
-                        entry.get("upload_id"),
-                        entry.get("activity_id"),
-                        entry.get("reason", ""),
-                    ])
-
-            print(f"After-action report written: {json_file}, {csv_file}")
+            print(f"After-action report appended to: {json_file}")
         except Exception:
             logger.exception("Failed to write after-action report")
 
