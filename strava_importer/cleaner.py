@@ -16,8 +16,6 @@ This module depends on the ``fitparse`` package.
 from pathlib import Path
 import logging
 from typing import Tuple, List, Dict, Any
-import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from fitparse import FitFile, FitParseError
 from tqdm import tqdm
@@ -104,15 +102,15 @@ def _inspect_fit(path_str: str) -> Tuple[str, str, str]:
 def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[str, Any]:
     """Scan ``fit_folder`` and move non-activity files to a ``_junk`` subfolder.
 
-    This function parallelizes the FIT inspection using a :class:`ProcessPoolExecutor`.
+    Files are inspected IN-PLACE to avoid race conditions from multiple
+    move operations happening simultaneously across processes.
 
     Parameters
     ----------
     fit_folder: Path
         Path to the folder containing .fit files to inspect.
     workers: Optional[int]
-        Number of worker processes to spawn. If ``None`` the function will
-        pick a sensible default based on CPU count.
+        Unused (kept for backward compatibility).
 
     Returns
     -------
@@ -127,12 +125,7 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[st
     junk_dir = fit_folder / "_junk"
     junk_dir.mkdir(parents=True, exist_ok=True)
 
-    processing_dir = fit_folder / "_processing"
-    processing_dir.mkdir(exist_ok=True)
-
     fits_to_process: List[Path] = sorted(fit_folder.glob("*.fit")) + sorted(fit_folder.glob("*.FIT"))
-    # Also include files that were moved to _processing in a previous run
-    fits_to_process += sorted(processing_dir.glob("*.fit")) + sorted(processing_dir.glob("*.FIT"))
 
     if not fits_to_process:
         return {"inspected": 0, "moved": 0, "errors": 0}
@@ -144,75 +137,38 @@ def pre_sweep_move_junk(fit_folder: Path, workers: int | None = None) -> Dict[st
     with tqdm(total=len(fits_to_process), desc="Inspecting FIT files") as pbar:
         for fit_path in fits_to_process:
             if not fit_path.exists():
-                logger.warning(f"File disappeared before processing (skipping): {fit_path}")
-                pbar.update(1)
-                continue
-
-            # Move file to _processing to avoid clashes
-            processing_path = processing_dir / fit_path.name
-            try:
-                fit_path.replace(processing_path)
-            except (FileNotFoundError, PermissionError) as e:
-                logger.error(f"Could not move {fit_path.name} to _processing folder, skipping: {e}")
-                errors += 1
+                # File likely moved by system/antivirus; silently skip
                 pbar.update(1)
                 continue
 
             try:
-                path_str, action, reason = _inspect_fit(str(processing_path))
+                # Inspect file IN-PLACE (no intermediate moves)
+                path_str, action, reason = _inspect_fit(str(fit_path))
                 inspected += 1
 
                 if action == 'move':
-                    dest = junk_dir / Path(path_str).name
+                    # Move junk files directly to _junk
+                    dest = junk_dir / fit_path.name
                     try:
-                        Path(path_str).replace(dest)
+                        fit_path.replace(dest)
                         moved += 1
                     except FileNotFoundError:
-                        logger.error(f"File {Path(path_str).name} was moved or deleted during inspection.")
-                        errors += 1
-                    except Exception:
-                        logger.exception("Failed to move %s to _junk", path_str)
+                        # File disappeared; skip silently
+                        pass
+                    except Exception as e:
+                        logger.debug(f"Could not move {fit_path.name} to _junk: {e}")
                         errors += 1
                 elif action == 'error':
+                    # Could not parse file; leave it for upload (safer)
+                    logger.debug(f"Could not inspect {fit_path.name}: {reason}")
                     errors += 1
-                    logger.warning("Error inspecting %s: %s", path_str, reason)
-                    # Move back to main folder if it's an error
-                    dest_back = fit_folder / Path(path_str).name
-                    try:
-                        Path(path_str).replace(dest_back)
-                    except Exception:
-                        logger.exception(f"Failed to move {Path(path_str).name} back after error")
-
-                else:  # Keep
-                    dest_back = fit_folder / Path(path_str).name
-                    try:
-                        Path(path_str).replace(dest_back)
-                    except Exception:
-                        logger.exception(f"Failed to move {Path(path_str).name} back to main folder")
-
+                # else: 'keep' - do nothing, file stays in main folder
 
             except Exception as e:
-                logger.exception("A critical error occurred inspecting %s: %s", processing_path.name, e)
+                logger.debug(f"Error processing {fit_path.name}: {e}")
                 errors += 1
-                # Try to move it back to the main folder
-                dest_back = fit_folder / processing_path.name
-                try:
-                    if processing_path.exists():
-                        processing_path.replace(dest_back)
-                except Exception:
-                    logger.exception(f"Failed to move {processing_path.name} back to main folder after critical error")
 
             pbar.update(1)
-
-    # Cleanup: move any remaining files from _processing back to the main folder
-    for remaining_file in processing_dir.glob("*.fit"):
-        logger.warning(f"Moving orphaned file {remaining_file.name} back to main directory.")
-        dest_back = fit_folder / remaining_file.name
-        try:
-            remaining_file.replace(dest_back)
-        except Exception:
-            logger.exception(f"Failed to move orphaned file {remaining_file.name} back.")
-
 
     return {"inspected": inspected, "moved": moved, "errors": errors}
 

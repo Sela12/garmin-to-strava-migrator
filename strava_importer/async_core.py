@@ -37,7 +37,7 @@ class AsyncStravaUploader:
     async def _move_to_failed(self, fit_path: Path):
         """Move a failed upload to the _failed folder."""
         if not fit_path.exists():
-            logger.warning(f"File disappeared before it could be moved to _failed: {fit_path.name}")
+            # File already gone (system/antivirus moved it)
             return
 
         failed_dir = self.config.fit_folder / "_failed"
@@ -47,9 +47,10 @@ class AsyncStravaUploader:
             fit_path.replace(dest)
             logger.debug(f"Moved failed file to {dest}")
         except FileNotFoundError:
-            logger.warning(f"File disappeared before it could be moved to _failed: {fit_path.name}")
+            # File disappeared between check and move
+            pass
         except Exception:
-            logger.exception(f"Failed to move {fit_path} to failed folder")
+            logger.debug(f"Could not move {fit_path} to _failed (likely already processed)")
 
     async def _poll_upload_status(self, session: aiohttp.ClientSession, upload_id: int) -> Dict[str, Any]:
         """Legacy per-worker poll helper kept for compatibility.
@@ -72,24 +73,28 @@ class AsyncStravaUploader:
                 self.processed.append({"file": str(fit_path), "status": "created", "upload_id": upload_id, "activity_id": activity_id})
             except Exception:
                 pass
-            if fit_path.exists():
-                try:
+            # Silently try to delete; file may already be gone
+            try:
+                if fit_path.exists():
                     fit_path.unlink()
-                except Exception:
-                    logger.exception("Failed to delete file after success: %s", fit_path)
+            except Exception:
+                pass
         elif "duplicate" in str(status).lower():
             self.upload_stats["duplicate"] += 1
             try:
                 self.processed.append({"file": str(fit_path), "status": "duplicate", "upload_id": upload_id, "activity_id": activity_id})
             except Exception:
                 pass
-            if fit_path.exists():
-                try:
+            # Silently try to delete; file may already be gone
+            try:
+                if fit_path.exists():
                     fit_path.unlink()
-                except Exception:
-                    logger.exception("Failed to delete duplicate file %s", fit_path)
+            except Exception:
+                pass
         else:
-            logger.warning(f"Upload of {fit_path.name} failed with status: {final_status.get('status')}")
+            # Only log unusual statuses
+            if status and "still being processed" not in status and "error processing" not in status.lower():
+                logger.debug(f"Upload status for {fit_path.name}: {status}")
             self.upload_stats["failed"] += 1
             try:
                 self.processed.append({"file": str(fit_path), "status": "failed", "upload_id": upload_id, "activity_id": activity_id, "reason": status})
@@ -191,13 +196,13 @@ class AsyncStravaUploader:
                     self._pbar.update(1)
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(f"Upload of {fit_path.name} failed: {e}")
+            logger.debug(f"Upload of {fit_path.name} failed: {e}")
             self.upload_stats["failed"] += 1
             await self._move_to_failed(fit_path)
             if self._pbar:
                 self._pbar.update(1)
-        except Exception:
-            logger.exception(f"An unexpected error occurred while uploading {fit_path.name}")
+        except Exception as e:
+            logger.debug(f"Error while uploading {fit_path.name}: {e}")
             self.upload_stats["failed"] += 1
             await self._move_to_failed(fit_path)
             if self._pbar:
