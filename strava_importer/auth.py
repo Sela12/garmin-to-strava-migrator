@@ -78,7 +78,7 @@ class StravaAuth:
             logger.exception("Failed to save token file")
 
     def exchange_code(self) -> TokenInfo:
-        resp = requests.post(self.TOKEN_URL, data={
+        resp = requests.post(self.TOKEN_URL, json={
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "code": self.auth_code,

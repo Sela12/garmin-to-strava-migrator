@@ -9,13 +9,13 @@ from strava_importer.core import StravaUploader
 from strava_importer.cleaner import pre_sweep_move_junk
 
 # Load environment from .env (if present)
-load_dotenv()
+load_dotenv(encoding='utf-8')
 
 # --- CONFIGURATION (from environment) ---
 CLIENT_ID = getenv('CLIENT_ID')
 CLIENT_SECRET = getenv('CLIENT_SECRET')
 AUTH_CODE = getenv('AUTH_CODE')
-FIT_FOLDER = getenv('FIT_FOLDER')
+FIT_FOLDER = getenv('FIT_FOLDER') or "../garmin"
 
 def setup_logging() -> None:
     logging.basicConfig(

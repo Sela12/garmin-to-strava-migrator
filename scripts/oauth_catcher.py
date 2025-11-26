@@ -5,11 +5,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 import time
+import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
-import os
+load_dotenv(encoding='utf-8')
 
 # Ensure project root importable
 sys.path.insert(0, str(Path.cwd()))
