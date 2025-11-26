@@ -33,13 +33,15 @@ def configure_logging(log_file: str = "strava_upload.log", level: int = logging.
 
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
+    # File handler: detailed INFO level logs
     fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setFormatter(fmt)
     fh.setLevel(level)
 
+    # Console handler: minimal output, only WARNING+ messages
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)
-    ch.setLevel(level)
+    ch.setLevel(logging.WARNING)  # Only show warnings/errors in terminal
 
     root.addHandler(fh)
     root.addHandler(ch)
