@@ -1,3 +1,5 @@
+Vibe coding project for now. Will write properly later. Terrible code at the moment, only wanted it to work for a start.
+
 # FIT File to Strava Uploader
 
 This script uploads `.fit` files from any source to your Strava account. It works with FIT files from Garmin, Wahoo, Polar, Suunto, or any other device that exports FIT format. The uploader is designed to be robust, handling rate limits, duplicates, and other potential issues.
